@@ -1,0 +1,2 @@
+# Python 客户端依赖
+websockets>=12.0

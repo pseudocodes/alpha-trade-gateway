@@ -1,0 +1,49 @@
+# Open Trade CTP SE15 Go 配置文件
+
+# 服务监听地址
+host = "0.0.0.0"
+port = 7788
+
+# 用户数据存储路径
+user_file_path = "./data/users"
+
+# 是否自动确认结算单
+auto_confirm_settlement = true
+
+# 是否打印行情日志
+log_price_info = false
+
+# 经纪商列表配置文件路径
+broker_list_path = "./config/broker_list.json"
+
+# 日志配置
+[log]
+level = "info"           # debug, info, warn, error, fatal
+filename = "./logs/trader.log"
+console = true
+
+# CTP 配置
+[ctp]
+flow_path = "./data/ctp_flow/"
+use_dynamic_lib = false
+dynamic_lib_path = ""
+
+# 行情服务配置
+[marketfeed]
+# 行情数据源类型: "tq" (天勤) 或 "ctp" (CTP原生)
+type = "tq"
+# 默认订阅的合约列表
+symbols = ["SHFE.ag2601", "SHFE.au2604"]
+
+# 天勤行情配置 (当 type = "tq" 时使用)
+[marketfeed.tq]
+url = "wss://openmd.shinnytech.com/t/md/front/mobile"
+token = ""
+
+# CTP 行情配置 (当 type = "ctp" 时使用)
+[marketfeed.ctp]
+front_addr = "tcp://182.254.243.31:40011"
+broker_id = "9999"
+user_id = ""
+password = ""
+flow_path = "./ctpmd_flow/"

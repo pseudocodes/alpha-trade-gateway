@@ -1,0 +1,39 @@
+[
+  {
+    "name": "simnow",
+    "type": "ctp",
+    "is_fens": false,
+    "broker_id": "9999",
+    "trading_fronts": [
+      "tcp://182.254.243.31:30001",
+      "tcp://182.254.243.31:30002"
+    ],
+    "app_id": "simnow_client_test",
+    "product_info": "simple_otg_0_1_0",
+    "auth_code": "0000000000000000"
+  },
+  {
+    "name": "simnow_7x24",
+    "type": "ctp",
+    "is_fens": false,
+    "broker_id": "9999",
+    "trading_fronts": [
+      "tcp://182.254.243.31:40001"
+    ],
+    "app_id": "simnow_client_test",
+    "product_info": "simple_otg_0_1_0",
+    "auth_code": "0000000000000000"
+  },
+  {
+    "name": "openctp",
+    "type": "ctp",
+    "is_fens": false,
+    "broker_id": "9999",
+    "trading_fronts": [
+      "tcp://121.37.90.193:20002"
+    ],
+    "app_id": "simnow_client_test",
+    "product_info": "simple_otg_0_1_0",
+    "auth_code": ""
+  }
+]

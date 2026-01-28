@@ -1,0 +1,33 @@
+{
+  "host": "0.0.0.0",
+  "port": 7788,
+  "user_file_path": "./data/users",
+  "auto_confirm_settlement": true,
+  "log_price_info": false,
+  "broker_list_path": "./config/broker_list.json",
+  "log": {
+    "level": "info",
+    "filename": "./logs/trader.log",
+    "console": true
+  },
+  "ctp": {
+    "flow_path": "./data/ctp_flow/",
+    "use_dynamic_lib": false,
+    "dynamic_lib_path": ""
+  },
+  "marketfeed": {
+    "type": "tq",
+    "symbols": ["SHFE.ag2601", "SHFE.au2604"],
+    "tq": {
+      "url": "wss://openmd.shinnytech.com/t/md/front/mobile",
+      "token": ""
+    },
+    "ctp": {
+      "front_addr": "tcp://182.254.243.31:40011",
+      "broker_id": "9999",
+      "user_id": "",
+      "password": "",
+      "flow_path": "./ctpmd_flow/"
+    }
+  }
+}
