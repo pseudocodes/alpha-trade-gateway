@@ -50,7 +50,7 @@ func NewCtpMarketClient(frontAddr, brokerID, userID, password, flowPath string) 
 		// 缓存行情
 		cli.quotesMap.Store(quote.InstrumentID, quote)
 
-		// 触发回调
+		// 触发回调（由外部注册，如 InstrumentService）
 		if cli.OnQuotes != nil {
 			cli.OnQuotes([]*Quote{quote})
 		}

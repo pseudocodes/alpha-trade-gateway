@@ -314,12 +314,7 @@ func (t *TraderCTP) clearOldData() {
 	// 对应 C++ m_Algorithm_Type = THOST_FTDC_AG_None;
 	t.algorithmType = 0
 
-	// 8. 重置合约信息加载标志
-	t.instrumentMapMu.Lock()
-	t.instrumentReady = false
-	t.instrumentMapMu.Unlock()
-
-	// 9. 重置订单通知相关数据结构
+	// 8. 重置订单通知相关数据结构
 	// 对应 C++ m_insert_order_set.clear(); m_cancel_order_set.clear(); m_input_order_key_map.clear();
 	t.insertOrderSetMu.Lock()
 	t.insertOrderSet = make(map[string]bool)

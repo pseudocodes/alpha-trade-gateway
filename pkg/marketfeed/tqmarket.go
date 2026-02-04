@@ -114,10 +114,11 @@ func (c *TqMarketClient) doRecv() {
 					c.quotesMap.Store(symbol.String(), quote)
 					return true
 				})
+				// 触发回调（由外部注册，如 InstrumentService）
 				if c.OnQuotes != nil {
 					c.OnQuotes(quotes)
 				}
-				c.tqconn.txC <- PeekMsg
+				c.tqconn.Tx() <- PeekMsg
 			}
 		case <-c.quitC:
 			logger.Info("marketfeed recv loop quit")

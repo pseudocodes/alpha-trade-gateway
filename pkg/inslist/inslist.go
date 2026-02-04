@@ -21,7 +21,21 @@ import (
 const (
 	// DefaultInsListURL 天勤合约列表默认 URL
 	DefaultInsListURL = "https://openmd.shinnytech.com/t/md/symbols/latest.json"
+
+	// SourceTianqin 数据来源：天勤
+	SourceTianqin = "tianqin"
+	// SourceCTP 数据来源：CTP
+	SourceCTP = "ctp"
 )
+
+// Config 合约服务配置
+type Config struct {
+	// Source 数据来源: "tianqin" 或 "ctp"
+	Source string `json:"source" mapstructure:"source"`
+
+	// TianqinURL 天勤合约列表 URL (source=tianqin 时使用)
+	TianqinURL string `json:"tianqin_url" mapstructure:"tianqin_url"`
+}
 
 // InstrumentInfo 合约信息
 // 对应 C++ Instrument 结构，保持字段一致
@@ -71,6 +85,9 @@ func NewInstrumentInfo() *InstrumentInfo {
 // InstrumentService 合约信息服务
 // 对应 C++ ins_list.cpp 的功能
 type InstrumentService struct {
+	// 配置
+	config Config
+
 	// 合约信息缓存 (对应 C++ InsMapType)
 	instruments   map[string]*InstrumentInfo
 	instrumentsMu sync.RWMutex
@@ -79,53 +96,68 @@ type InstrumentService struct {
 	instrumentExchangeMap   map[string]string
 	instrumentExchangeMapMu sync.RWMutex
 
-	// 行情客户端 (用于获取动态行情)
-	marketClient marketfeed.MarketClient
-
-	// 天勤合约列表 URL
-	insListURL string
-
 	// 是否已初始化
 	initialized atomic.Bool
 }
 
 // NewInstrumentService 创建合约信息服务
-func NewInstrumentService(marketClient marketfeed.MarketClient) *InstrumentService {
+func NewInstrumentService(cfg Config) *InstrumentService {
+	if cfg.Source == "" {
+		cfg.Source = SourceTianqin
+	}
+	if cfg.TianqinURL == "" {
+		cfg.TianqinURL = DefaultInsListURL
+	}
+
 	return &InstrumentService{
+		config:                cfg,
 		instruments:           make(map[string]*InstrumentInfo),
 		instrumentExchangeMap: make(map[string]string),
-		marketClient:          marketClient,
-		insListURL:            DefaultInsListURL,
 	}
 }
 
-// SetInsListURL 设置合约列表 URL
-func (s *InstrumentService) SetInsListURL(url string) {
-	s.insListURL = url
-}
-
-// Init 初始化服务，从天勤加载合约列表
+// Init 初始化服务
 // 对应 C++ GenInstrumentExchangeIdMap
+// 根据配置的 Source 决定初始化方式：
+// - tianqin: 从天勤 URL 加载合约列表
+// - ctp: 不做任何操作，等待 SetInstrument 调用
 func (s *InstrumentService) Init() error {
 	if s.initialized.Load() {
 		return nil
 	}
 
-	// 从天勤获取合约列表
-	if err := s.loadInstrumentList(); err != nil {
-		return err
+	switch s.config.Source {
+	case SourceTianqin:
+		// 从天勤获取合约列表
+		if err := s.loadFromTianqin(); err != nil {
+			return err
+		}
+		// 生成合约代码到交易所的映射
+		s.genInstrumentExchangeMap()
+		s.initialized.Store(true)
+
+	case SourceCTP:
+		// CTP 模式：不做任何操作，等待 SetInstrument 调用
+		// initialized 标志在 MarkReady() 中设置
 	}
 
-	// 生成合约代码到交易所的映射
-	s.genInstrumentExchangeMap()
-
-	s.initialized.Store(true)
 	return nil
 }
 
-// loadInstrumentList 从天勤加载合约列表
-func (s *InstrumentService) loadInstrumentList() error {
-	resp, err := http.Get(s.insListURL)
+// MarkReady 标记服务就绪（CTP 模式下，查询完成后调用）
+func (s *InstrumentService) MarkReady() {
+	s.genInstrumentExchangeMap()
+	s.initialized.Store(true)
+}
+
+// IsReady 检查服务是否就绪
+func (s *InstrumentService) IsReady() bool {
+	return s.initialized.Load()
+}
+
+// loadFromTianqin 从天勤加载合约列表
+func (s *InstrumentService) loadFromTianqin() error {
+	resp, err := http.Get(s.config.TianqinURL)
 	if err != nil {
 		return fmt.Errorf("fetch instrument list failed: %w", err)
 	}
@@ -141,7 +173,7 @@ func (s *InstrumentService) loadInstrumentList() error {
 	defer s.instrumentsMu.Unlock()
 
 	gjson.ParseBytes(body).ForEach(func(symbol, value gjson.Result) bool {
-		ins := s.parseInstrument(symbol.String(), value)
+		ins := s.parseInstrumentFromTianqin(symbol.String(), value)
 		if ins != nil {
 			s.instruments[symbol.String()] = ins
 		}
@@ -168,8 +200,8 @@ func (s *InstrumentService) genInstrumentExchangeMap() {
 	}
 }
 
-// parseInstrument 解析单个合约信息
-func (s *InstrumentService) parseInstrument(symbol string, value gjson.Result) *InstrumentInfo {
+// parseInstrumentFromTianqin 解析天勤格式的合约信息
+func (s *InstrumentService) parseInstrumentFromTianqin(symbol string, value gjson.Result) *InstrumentInfo {
 	parts := strings.Split(symbol, ".")
 	if len(parts) != 2 {
 		return nil
@@ -221,25 +253,60 @@ func (s *InstrumentService) parseInstrument(symbol string, value gjson.Result) *
 // 对应 C++ GetInstrument
 func (s *InstrumentService) GetInstrument(symbol string) *InstrumentInfo {
 	s.instrumentsMu.RLock()
-	ins, exists := s.instruments[symbol]
-	s.instrumentsMu.RUnlock()
+	defer s.instrumentsMu.RUnlock()
 
-	if !exists {
-		return nil
+	if ins, exists := s.instruments[symbol]; exists {
+		return ins
 	}
-
-	// 从 marketfeed 更新动态行情
-	if s.marketClient != nil {
-		if quote := s.marketClient.GetQuote(symbol); quote != nil {
-			s.updateQuoteData(ins, quote)
-		}
-	}
-
-	return ins
+	return nil
 }
 
-// updateQuoteData 更新行情数据
-func (s *InstrumentService) updateQuoteData(ins *InstrumentInfo, quote *marketfeed.Quote) {
+// SetInstrument 设置/更新合约信息
+// 供 CTP OnRspQryInstrument 回调使用
+func (s *InstrumentService) SetInstrument(symbol string, ins *InstrumentInfo) {
+	s.instrumentsMu.Lock()
+	defer s.instrumentsMu.Unlock()
+
+	if existing, exists := s.instruments[symbol]; exists {
+		// 更新静态字段，保留动态行情字段
+		existing.Expired = ins.Expired
+		existing.ProductClass = ins.ProductClass
+		existing.VolumeMultiple = ins.VolumeMultiple
+		existing.Margin = ins.Margin
+		existing.Commission = ins.Commission
+		existing.PriceTick = ins.PriceTick
+	} else {
+		s.instruments[symbol] = ins
+	}
+}
+
+// UpdateQuote 更新单个合约的行情数据
+// 供 MarketFeed 行情回调使用
+func (s *InstrumentService) UpdateQuote(quote *marketfeed.Quote) {
+	if quote == nil {
+		return
+	}
+
+	// 构建 symbol
+	symbol := quote.InstrumentID
+	if quote.ExchangeID != "" && !strings.Contains(symbol, ".") {
+		symbol = quote.ExchangeID + "." + quote.InstrumentID
+	}
+
+	s.instrumentsMu.Lock()
+	defer s.instrumentsMu.Unlock()
+
+	ins, exists := s.instruments[symbol]
+	if !exists {
+		// 如果合约不存在，创建一个新的（仅包含行情数据）
+		ins = NewInstrumentInfo()
+		ins.Symbol = symbol
+		ins.ExchangeID = quote.ExchangeID
+		ins.InstrumentID = quote.InstrumentID
+		s.instruments[symbol] = ins
+	}
+
+	// 更新动态行情字段
 	ins.LastPrice = quote.LastPrice
 	ins.AskPrice1 = quote.AskPrice1
 	ins.BidPrice1 = quote.BidPrice1
@@ -249,6 +316,23 @@ func (s *InstrumentService) updateQuoteData(ins *InstrumentInfo, quote *marketfe
 	ins.PreClose = quote.PreClose
 	ins.Settlement = quote.Settlement
 	ins.Volume = int64(quote.Volume)
+}
+
+// UpdateQuotes 批量更新行情数据
+func (s *InstrumentService) UpdateQuotes(quotes []*marketfeed.Quote) {
+	for _, quote := range quotes {
+		s.UpdateQuote(quote)
+	}
+}
+
+// OnQuotes 行情回调函数，可直接注册到 MarketClient.SetOnQuotes
+// 使用示例:
+//
+//	insService := inslist.NewInstrumentService(cfg)
+//	marketClient := marketfeed.NewTqMarketClient("")
+//	marketClient.SetOnQuotes(insService.OnQuotes)
+func (s *InstrumentService) OnQuotes(quotes []*marketfeed.Quote) {
+	s.UpdateQuotes(quotes)
 }
 
 // GuessExchangeID 根据合约代码猜测交易所
@@ -322,9 +406,4 @@ func (s *InstrumentService) Count() int {
 	s.instrumentsMu.RLock()
 	defer s.instrumentsMu.RUnlock()
 	return len(s.instruments)
-}
-
-// parseInstrumentFromJSON 从 JSON 字符串解析合约信息 (用于测试)
-func (s *InstrumentService) parseInstrumentFromJSON(symbol, jsonStr string) *InstrumentInfo {
-	return s.parseInstrument(symbol, gjson.Parse(jsonStr))
 }

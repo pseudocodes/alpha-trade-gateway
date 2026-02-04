@@ -15,6 +15,7 @@ import (
 
 	"alpha-trade-gateway/pkg/condorder"
 	"alpha-trade-gateway/pkg/config"
+	"alpha-trade-gateway/pkg/inslist"
 	"alpha-trade-gateway/pkg/logger"
 	"alpha-trade-gateway/pkg/marketfeed"
 	"alpha-trade-gateway/pkg/protocol"
@@ -75,16 +76,13 @@ type TraderCTP struct {
 
 	// CTP API
 	ctpSpi *CtpSpi
-	ctpApi interface{} // thost.TraderApi
+	ctpApi any // thost.TraderApi
 
-	// 合约信息 map
+	// 合约信息服务 (统一的合约信息提供者)
 	// 对应 C++ GetInstrument / InstrumentMap
-	// key: exchangeID.instrumentID, value: Instrument
-	instrumentMap   map[string]*protocol.Instrument
-	instrumentMapMu sync.RWMutex
-	instrumentReady bool // 合约信息是否已加载完成
+	insService *inslist.InstrumentService
 
-	// 行情数据 (使用 marketfeed)
+	// 行情数据 (使用 marketfeed，保留用于订阅)
 	// 对应 C++ InstrumentMap
 	marketClient marketfeed.MarketClient
 
@@ -165,7 +163,6 @@ func New(ctx context.Context) *TraderCTP {
 		cancel:           cancel,
 		state:            StateInit,
 		connections:      make(map[int]*ConnInfo),
-		instrumentMap:    make(map[string]*protocol.Instrument),
 		orderKeyManager:  NewOrderKeyManager(), // Phase 2: Persistence
 		queryScheduler:   NewQueryScheduler(),  // OnIdle 查询调度
 		insertOrderSet:   make(map[string]bool),
@@ -184,6 +181,11 @@ func (t *TraderCTP) SetMsgSender(sender func(connID int, msg string)) {
 // MarketFeed 在 main.go 中作为独立服务启动，然后注入到 TraderCTP
 func (t *TraderCTP) SetMarketClient(client marketfeed.MarketClient) {
 	t.marketClient = client
+}
+
+// SetInstrumentService 设置合约信息服务
+func (t *TraderCTP) SetInstrumentService(svc *inslist.InstrumentService) {
+	t.insService = svc
 }
 
 // Stop 停止交易器
@@ -359,37 +361,53 @@ func (t *TraderCTP) startQueryInstruments() {
 
 // GetInstrument 获取合约信息
 // 对应 C++ GetInstrument(symbol)
-func (t *TraderCTP) GetInstrument(instrumentID string) *protocol.Instrument {
-	t.instrumentMapMu.RLock()
-	defer t.instrumentMapMu.RUnlock()
-
-	if ins, ok := t.instrumentMap[instrumentID]; ok {
-		return ins
+// 优先从 InstrumentService 获取，包含最新行情
+func (t *TraderCTP) GetInstrument(symbol string) *protocol.Instrument {
+	if t.insService == nil {
+		return nil
 	}
-	return nil
-}
 
-// setInstrument 设置合约信息
-func (t *TraderCTP) setInstrument(instrumentID string, ins *protocol.Instrument) {
-	t.instrumentMapMu.Lock()
-	defer t.instrumentMapMu.Unlock()
+	ins := t.insService.GetInstrument(symbol)
+	if ins == nil {
+		return nil
+	}
 
-	t.instrumentMap[instrumentID] = ins
+	// 转换为 protocol.Instrument
+	return &protocol.Instrument{
+		ExchangeID:     ins.ExchangeID,
+		InstrumentID:   ins.InstrumentID,
+		ProductClass:   ins.ProductClass,
+		VolumeMultiple: ins.VolumeMultiple,
+		PriceTick:      ins.PriceTick,
+		Margin:         ins.Margin,
+		Commission:     ins.Commission,
+		Expired:        ins.Expired,
+		// 动态行情字段
+		LastPrice:     ins.LastPrice,
+		PreSettlement: ins.PreSettlement,
+		UpperLimit:    ins.UpperLimit,
+		LowerLimit:    ins.LowerLimit,
+		AskPrice1:     ins.AskPrice1,
+		BidPrice1:     ins.BidPrice1,
+		Settlement:    ins.Settlement,
+		PreClose:      ins.PreClose,
+	}
 }
 
 // onInstrumentQueryComplete 合约查询完成
 func (t *TraderCTP) onInstrumentQueryComplete() {
-	t.instrumentMapMu.Lock()
-	t.instrumentReady = true
-	count := len(t.instrumentMap)
-	t.instrumentMapMu.Unlock()
+	// 标记 InstrumentService 就绪
+	if t.insService != nil {
+		t.insService.MarkReady()
+	}
 
+	count := 0
+	if t.insService != nil {
+		count = t.insService.Count()
+	}
 	logger.Info("instrument query completed", zap.Int("count", count))
 
-	// 为所有持仓绑定合约信息(not necessary)
-	// t.bindPositionInstruments()
-
-	//  然后查询账户和持仓
+	// 然后查询账户和持仓
 	t.startQueryData()
 }
 
@@ -419,25 +437,13 @@ func (t *TraderCTP) startQueryData() {
 	t.startQueryDataFull()
 }
 
-// initMarketFeedCallback 初始化行情回调
-// MarketFeed 已在 main.go 中作为独立服务启动，这里只需设置回调并订阅合约
-// 对应 C++ 中使用 InstrumentMap 获取行情的功能
+// initMarketFeedCallback 初始化行情相关功能
+// MarketFeed 已在 main.go 中作为独立服务启动
+// 行情数据通过 InstrumentService 获取，trader 不直接与 marketfeed 交互
+// 这里只负责订阅合约和启动定时任务
 func (t *TraderCTP) initMarketFeedCallback() {
-	if t.marketClient == nil {
-		logger.Warn("marketClient is nil, skip init callback")
-		return
-	}
-
-	// 设置行情回调
-	t.marketClient.SetOnQuotes(t.onQuotesUpdate)
-
-	logger.Info("marketfeed callback initialized")
-
 	// 订阅持仓合约
 	t.subscribePositionSymbols()
-
-	// 启动定时更新持仓盈亏
-	// t.startPositionUpdateLoop()
 
 	// 启动 OnIdle 循环 (查询调度)
 	t.startIdleLoop()
@@ -493,31 +499,99 @@ func (t *TraderCTP) subscribeSymbolIfNeeded(symbol string) {
 	}
 }
 
-// onQuotesUpdate 行情更新回调
-// 注意：此回调仅用于触发数据变化标记，不再进行盈亏计算
-// 盈亏计算统一在 recalculatePositionAndAccountProfit() 中完成
-// 对应 C++ 中 InstrumentMap 数据更新时的处理
-func (t *TraderCTP) onQuotesUpdate(quotes []*marketfeed.Quote) {
-	// 行情回调不再进行盈亏计算
-	// 盈亏计算统一在 sendAllUserData() 调用时通过 recalculatePositionAndAccountProfit() 完成
-	// 这样可以避免高频行情下的频繁计算
-	for _, quote := range quotes {
-		logger.Debug("quote received", zap.String("instrument_id", quote.InstrumentID), zap.String("exchange_id", quote.ExchangeID))
+// updatePositionProfitWithInsInfo 使用 InstrumentInfo 更新单个持仓盈亏 (内部函数，不加锁)
+// 对应 C++ tradectp.cpp 中的持仓盈亏计算逻辑 (4048-4320行)
+// 返回值: 是否有变化
+func (t *TraderCTP) updatePositionProfitWithInsInfo(pos *protocol.Position, ins *inslist.InstrumentInfo) bool {
+	if pos == nil || ins == nil {
+		return false
 	}
+
+	// 获取最新价
+	lastPrice := ins.LastPrice
+	if math.IsNaN(lastPrice) || lastPrice <= 0 {
+		// 开盘前使用昨收或昨结算价
+		lastPrice = ins.PreClose
+		if math.IsNaN(lastPrice) || lastPrice <= 0 {
+			lastPrice = ins.PreSettlement
+		}
+	}
+
+	if math.IsNaN(lastPrice) || lastPrice <= 0 {
+		return false
+	}
+
+	// 判断市场状态
+	lastPriceValid := !math.IsNaN(ins.LastPrice) && ins.LastPrice > 0
+	settlementValid := !math.IsNaN(ins.Settlement) && ins.Settlement > 0
+	var newMarketStatus int
+	if !lastPriceValid && !settlementValid {
+		newMarketStatus = 0 // 开盘前
+	} else if lastPriceValid && !settlementValid {
+		newMarketStatus = 1 // 交易中
+	} else {
+		newMarketStatus = 2 // 收盘后
+	}
+	if pos.MarketStatus != newMarketStatus {
+		pos.MarketStatus = newMarketStatus
+		pos.Changed = true
+	}
+
+	// 获取合约乘数
+	volumeMultiple := 10.0
+	if ins.VolumeMultiple > 0 {
+		volumeMultiple = float64(ins.VolumeMultiple)
+	}
+
+	// 检查价格是否变化
+	if math.Abs(lastPrice-pos.LastPrice) < 1e-9 {
+		return false
+	}
+
+	pos.LastPrice = lastPrice
+
+	// 计算浮动盈亏 (保留3位小数)
+	pos.FloatProfitLong = round3(lastPrice*float64(pos.VolumeLong)*volumeMultiple - pos.OpenCostLong)
+	pos.FloatProfitShort = round3(pos.OpenCostShort - lastPrice*float64(pos.VolumeShort)*volumeMultiple)
+	pos.FloatProfit = round3(pos.FloatProfitLong + pos.FloatProfitShort)
+
+	// 计算持仓盈亏 (保留3位小数)
+	isOption := ins.ProductClass == protocol.ProductClassOptions || ins.ProductClass == protocol.ProductClassFOption
+	if isOption {
+		pos.PositionProfitLong = 0
+		pos.PositionProfitShort = 0
+		pos.PositionProfit = 0
+	} else {
+		pos.PositionProfitLong = round3(lastPrice*float64(pos.VolumeLong)*volumeMultiple - pos.PositionCostLong)
+		pos.PositionProfitShort = round3(pos.PositionCostShort - lastPrice*float64(pos.VolumeShort)*volumeMultiple)
+		pos.PositionProfit = round3(pos.PositionProfitLong + pos.PositionProfitShort)
+	}
+
+	// 计算开仓均价和持仓均价 (保留3位小数)
+	if pos.VolumeLong > 0 {
+		pos.OpenPriceLong = round3(pos.OpenCostLong / (float64(pos.VolumeLong) * volumeMultiple))
+		pos.PositionPriceLong = round3(pos.PositionCostLong / (float64(pos.VolumeLong) * volumeMultiple))
+	}
+	if pos.VolumeShort > 0 {
+		pos.OpenPriceShort = round3(pos.OpenCostShort / (float64(pos.VolumeShort) * volumeMultiple))
+		pos.PositionPriceShort = round3(pos.PositionCostShort / (float64(pos.VolumeShort) * volumeMultiple))
+	}
+
+	pos.Changed = true
+	return true
 }
 
 // updatePositionProfitWithQuote 使用行情数据更新单个持仓盈亏 (内部函数，不加锁)
-// 对应 C++ tradectp.cpp 中的持仓盈亏计算逻辑 (4048-4320行)
-// 返回值: 是否有变化
+// 已废弃：请使用 updatePositionProfitWithInsInfo
+// 保留此函数是为了兼容
 func (t *TraderCTP) updatePositionProfitWithQuote(pos *protocol.Position, quote *marketfeed.Quote) bool {
 	if pos == nil || quote == nil {
 		return false
 	}
 
-	// 如果 pos.Ins 为空，尝试从 instrumentMap 获取
-	// 对应 C++ ps.ins = GetInstrument(symbol)
+	// 如果 pos.Ins 为空，尝试获取
 	if pos.Ins == nil {
-		pos.Ins = t.GetInstrument(pos.InstrumentID)
+		pos.Ins = t.GetInstrument(pos.ExchangeID + "." + pos.InstrumentID)
 		if pos.Ins == nil {
 			return false
 		}
@@ -624,19 +698,19 @@ const (
 // 此函数应在 sendAllUserData() 中调用，而不是在行情回调中
 // 注意：调用者需持有 userMu 锁
 func (t *TraderCTP) recalculatePositionAndAccountProfit() {
-	if t.user == nil || t.marketClient == nil {
+	if t.user == nil || t.insService == nil {
 		return
 	}
 
 	var totalPositionProfit, totalFloatProfit, totalOptionValue float64
 	var somethingChanged bool
 
-	// 遍历所有持仓，获取最新行情并计算盈亏
-	for _, pos := range t.user.Positions {
-		// 获取最新行情
-		quote := t.marketClient.GetQuote(pos.InstrumentID)
-		if quote == nil {
-			// 没有行情数据，使用已有的盈亏值
+	// 遍历所有持仓，从 InstrumentService 获取最新行情并计算盈亏
+	for symbol, pos := range t.user.Positions {
+		// 从 InstrumentService 获取合约信息（包含最新行情）
+		ins := t.insService.GetInstrument(symbol)
+		if ins == nil {
+			// 没有合约信息，使用已有的盈亏值
 			if !math.IsNaN(pos.PositionProfit) {
 				totalPositionProfit += pos.PositionProfit
 			}
@@ -646,19 +720,19 @@ func (t *TraderCTP) recalculatePositionAndAccountProfit() {
 			continue
 		}
 
-		// 更新持仓盈亏
-		if t.updatePositionProfitWithQuote(pos, quote) {
+		// 使用 InstrumentService 中的行情数据更新持仓盈亏
+		if t.updatePositionProfitWithInsInfo(pos, ins) {
 			somethingChanged = true
 		}
 
 		// 累计盈亏
-		isOption := pos.Ins != nil && pos.Ins.ProductClass == protocol.ProductClassOptions
+		isOption := ins.ProductClass == protocol.ProductClassOptions || ins.ProductClass == protocol.ProductClassFOption
 		if isOption {
 			// 期权价值单独计算，盈亏不计入账户汇总
 			// 对应 C++ total_option_value 计算
 			multiple := float64(1)
-			if pos.Ins != nil && pos.Ins.VolumeMultiple > 0 {
-				multiple = float64(pos.Ins.VolumeMultiple)
+			if ins.VolumeMultiple > 0 {
+				multiple = float64(ins.VolumeMultiple)
 			}
 			if !math.IsNaN(pos.LastPrice) && pos.LastPrice > 0 {
 				totalOptionValue += float64(pos.VolumeLong) * multiple * pos.LastPrice

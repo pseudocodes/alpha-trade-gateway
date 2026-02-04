@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"alpha-trade-gateway/pkg/config"
+	"alpha-trade-gateway/pkg/inslist"
 	"alpha-trade-gateway/pkg/logger"
 	"alpha-trade-gateway/pkg/protocol"
 )
@@ -468,16 +469,22 @@ func (s *CtpSpi) OnRspQryInstrument(pInstrument *thost.CThostFtdcInstrumentField
 }
 
 // processInstrument 处理单个合约信息
+// 将 CTP 查询到的合约信息写入 InstrumentService
 func (s *CtpSpi) processInstrument(pInstrument *thost.CThostFtdcInstrumentField) {
+	if s.trader.insService == nil {
+		return
+	}
+
 	exchangeID := bytesToString(pInstrument.ExchangeID[:])
 	instrumentID := bytesToString(pInstrument.InstrumentID[:])
-	// symbol := exchangeID + "." + instrumentID
+	symbol := exchangeID + "." + instrumentID
 
-	ins := &protocol.Instrument{
-		VolumeMultiple: int64(pInstrument.VolumeMultiple),
-		PriceTick:      float64(pInstrument.PriceTick),
+	ins := &inslist.InstrumentInfo{
+		Symbol:         symbol,
 		ExchangeID:     exchangeID,
 		InstrumentID:   instrumentID,
+		VolumeMultiple: int64(pInstrument.VolumeMultiple),
+		PriceTick:      float64(pInstrument.PriceTick),
 	}
 
 	// 设置产品类型
@@ -492,14 +499,5 @@ func (s *CtpSpi) processInstrument(pInstrument *thost.CThostFtdcInstrumentField)
 		ins.ProductClass = protocol.ProductClassFutures
 	}
 
-	// 检查是否过期
-	// 简化处理：如果是期货，检查到期日
-	// if len(pInstrument.ExpireDate) > 0 {
-	// 	expireDate := bytesToString(pInstrument.ExpireDate[:])
-	// 	if expireDate != "" && expireDate < s.trader.user.TradingDay {
-	// 		ins.Expired = true
-	// 	}
-	// }
-
-	s.trader.setInstrument(instrumentID, ins)
+	s.trader.insService.SetInstrument(symbol, ins)
 }

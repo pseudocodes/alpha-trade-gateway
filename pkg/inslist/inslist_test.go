@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"alpha-trade-gateway/pkg/marketfeed"
 	"alpha-trade-gateway/pkg/protocol"
 )
 
@@ -49,7 +50,11 @@ func TestNewInstrumentInfo(t *testing.T) {
 
 // TestNewInstrumentService 测试创建合约信息服务
 func TestNewInstrumentService(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	cfg := Config{
+		Source:     SourceTianqin,
+		TianqinURL: DefaultInsListURL,
+	}
+	svc := NewInstrumentService(cfg)
 
 	if svc == nil {
 		t.Fatal("NewInstrumentService returned nil")
@@ -61,94 +66,27 @@ func TestNewInstrumentService(t *testing.T) {
 	if svc.instrumentExchangeMap == nil {
 		t.Error("instrumentExchangeMap should not be nil")
 	}
-	if svc.insListURL != DefaultInsListURL {
-		t.Errorf("insListURL should be %s, got %s", DefaultInsListURL, svc.insListURL)
+	if svc.config.TianqinURL != DefaultInsListURL {
+		t.Errorf("TianqinURL should be %s, got %s", DefaultInsListURL, svc.config.TianqinURL)
 	}
 }
 
-// TestParseInstrument 测试解析合约信息
-func TestParseInstrument(t *testing.T) {
-	svc := NewInstrumentService(nil)
+// TestNewInstrumentServiceDefaults 测试默认配置
+func TestNewInstrumentServiceDefaults(t *testing.T) {
+	// 空配置应该使用默认值
+	svc := NewInstrumentService(Config{})
 
-	tests := []struct {
-		name         string
-		symbol       string
-		jsonStr      string
-		wantExchange string
-		wantInsID    string
-		wantClass    int64
-		wantMultiple int64
-	}{
-		{
-			name:         "期货合约",
-			symbol:       "SHFE.au2406",
-			jsonStr:      `{"class":"FUTURE","volume_multiple":1000,"price_tick":0.02,"margin":0.08}`,
-			wantExchange: "SHFE",
-			wantInsID:    "au2406",
-			wantClass:    protocol.ProductClassFutures,
-			wantMultiple: 1000,
-		},
-		{
-			name:         "期权合约",
-			symbol:       "CFFEX.IO2406-C-4000",
-			jsonStr:      `{"class":"OPTION","volume_multiple":100,"price_tick":0.2}`,
-			wantExchange: "CFFEX",
-			wantInsID:    "IO2406-C-4000",
-			wantClass:    protocol.ProductClassOptions,
-			wantMultiple: 100,
-		},
-		{
-			name:         "指数合约",
-			symbol:       "CFFEX.IF2406",
-			jsonStr:      `{"class":"INDEX","volume_multiple":300}`,
-			wantExchange: "CFFEX",
-			wantInsID:    "IF2406",
-			wantClass:    protocol.ProductClassFutureIndex,
-			wantMultiple: 300,
-		},
+	if svc.config.Source != SourceTianqin {
+		t.Errorf("Source should default to %s, got %s", SourceTianqin, svc.config.Source)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// 使用 gjson 解析
-			ins := svc.parseInstrumentFromJSON(tt.symbol, tt.jsonStr)
-
-			if ins == nil {
-				t.Fatal("parseInstrument returned nil")
-			}
-			if ins.Symbol != tt.symbol {
-				t.Errorf("Symbol = %s, want %s", ins.Symbol, tt.symbol)
-			}
-			if ins.ExchangeID != tt.wantExchange {
-				t.Errorf("ExchangeID = %s, want %s", ins.ExchangeID, tt.wantExchange)
-			}
-			if ins.InstrumentID != tt.wantInsID {
-				t.Errorf("InstrumentID = %s, want %s", ins.InstrumentID, tt.wantInsID)
-			}
-			if ins.ProductClass != tt.wantClass {
-				t.Errorf("ProductClass = %d, want %d", ins.ProductClass, tt.wantClass)
-			}
-			if ins.VolumeMultiple != tt.wantMultiple {
-				t.Errorf("VolumeMultiple = %d, want %d", ins.VolumeMultiple, tt.wantMultiple)
-			}
-		})
-	}
-}
-
-// TestParseInstrumentInvalidSymbol 测试无效 symbol
-func TestParseInstrumentInvalidSymbol(t *testing.T) {
-	svc := NewInstrumentService(nil)
-
-	// 无效的 symbol (没有点号分隔)
-	ins := svc.parseInstrumentFromJSON("invalid_symbol", `{"class":"FUTURE"}`)
-	if ins != nil {
-		t.Error("parseInstrument should return nil for invalid symbol")
+	if svc.config.TianqinURL != DefaultInsListURL {
+		t.Errorf("TianqinURL should default to %s, got %s", DefaultInsListURL, svc.config.TianqinURL)
 	}
 }
 
 // TestGuessExchangeID 测试根据合约代码猜测交易所
 func TestGuessExchangeID(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	svc := NewInstrumentService(Config{Source: SourceCTP})
 
 	// 手动添加一些合约
 	svc.instrumentsMu.Lock()
@@ -194,7 +132,7 @@ func TestGuessExchangeID(t *testing.T) {
 
 // TestGetSymbol 测试根据合约代码获取完整 symbol
 func TestGetSymbol(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	svc := NewInstrumentService(Config{Source: SourceCTP})
 
 	// 手动添加合约并生成映射
 	svc.instrumentsMu.Lock()
@@ -221,7 +159,7 @@ func TestGetSymbol(t *testing.T) {
 
 // TestIsFutures 测试判断是否为期货合约
 func TestIsFutures(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	svc := NewInstrumentService(Config{Source: SourceCTP})
 
 	// 添加测试数据
 	svc.instrumentsMu.Lock()
@@ -248,7 +186,7 @@ func TestIsFutures(t *testing.T) {
 
 // TestIsOption 测试判断是否为期权合约
 func TestIsOption(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	svc := NewInstrumentService(Config{Source: SourceCTP})
 
 	// 添加测试数据
 	svc.instrumentsMu.Lock()
@@ -279,7 +217,7 @@ func TestIsOption(t *testing.T) {
 
 // TestGetAllInstruments 测试获取所有合约
 func TestGetAllInstruments(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	svc := NewInstrumentService(Config{Source: SourceCTP})
 
 	// 添加测试数据
 	svc.instrumentsMu.Lock()
@@ -295,7 +233,7 @@ func TestGetAllInstruments(t *testing.T) {
 
 // TestGetFuturesInstruments 测试获取所有期货合约
 func TestGetFuturesInstruments(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	svc := NewInstrumentService(Config{Source: SourceCTP})
 
 	// 添加测试数据
 	svc.instrumentsMu.Lock()
@@ -321,7 +259,7 @@ func TestGetFuturesInstruments(t *testing.T) {
 
 // TestCount 测试合约数量
 func TestCount(t *testing.T) {
-	svc := NewInstrumentService(nil)
+	svc := NewInstrumentService(Config{Source: SourceCTP})
 
 	if svc.Count() != 0 {
 		t.Errorf("Count() = %d, want 0", svc.Count())
@@ -334,5 +272,169 @@ func TestCount(t *testing.T) {
 
 	if svc.Count() != 2 {
 		t.Errorf("Count() = %d, want 2", svc.Count())
+	}
+}
+
+// TestSetInstrument 测试设置合约信息
+func TestSetInstrument(t *testing.T) {
+	svc := NewInstrumentService(Config{Source: SourceCTP})
+
+	ins := &InstrumentInfo{
+		Symbol:         "SHFE.au2406",
+		ExchangeID:     "SHFE",
+		InstrumentID:   "au2406",
+		ProductClass:   protocol.ProductClassFutures,
+		VolumeMultiple: 1000,
+		PriceTick:      0.02,
+		Margin:         0.08,
+	}
+
+	svc.SetInstrument("SHFE.au2406", ins)
+
+	got := svc.GetInstrument("SHFE.au2406")
+	if got == nil {
+		t.Fatal("GetInstrument returned nil after SetInstrument")
+	}
+	if got.VolumeMultiple != 1000 {
+		t.Errorf("VolumeMultiple = %d, want 1000", got.VolumeMultiple)
+	}
+	if got.PriceTick != 0.02 {
+		t.Errorf("PriceTick = %f, want 0.02", got.PriceTick)
+	}
+}
+
+// TestUpdateQuote 测试更新行情数据
+func TestUpdateQuote(t *testing.T) {
+	svc := NewInstrumentService(Config{Source: SourceCTP})
+
+	// 先添加合约
+	svc.SetInstrument("SHFE.au2406", &InstrumentInfo{
+		Symbol:         "SHFE.au2406",
+		ExchangeID:     "SHFE",
+		InstrumentID:   "au2406",
+		VolumeMultiple: 1000,
+	})
+
+	// 更新行情
+	quote := &marketfeed.Quote{
+		InstrumentID:  "au2406",
+		ExchangeID:    "SHFE",
+		LastPrice:     500.0,
+		AskPrice1:     500.1,
+		BidPrice1:     499.9,
+		UpperLimit:    550.0,
+		LowerLimit:    450.0,
+		PreSettlement: 498.0,
+		Volume:        12345,
+	}
+	svc.UpdateQuote(quote)
+
+	ins := svc.GetInstrument("SHFE.au2406")
+	if ins == nil {
+		t.Fatal("GetInstrument returned nil")
+	}
+	if ins.LastPrice != 500.0 {
+		t.Errorf("LastPrice = %f, want 500.0", ins.LastPrice)
+	}
+	if ins.AskPrice1 != 500.1 {
+		t.Errorf("AskPrice1 = %f, want 500.1", ins.AskPrice1)
+	}
+	if ins.BidPrice1 != 499.9 {
+		t.Errorf("BidPrice1 = %f, want 499.9", ins.BidPrice1)
+	}
+	if ins.Volume != 12345 {
+		t.Errorf("Volume = %d, want 12345", ins.Volume)
+	}
+	// 静态字段应该保留
+	if ins.VolumeMultiple != 1000 {
+		t.Errorf("VolumeMultiple = %d, want 1000 (should be preserved)", ins.VolumeMultiple)
+	}
+}
+
+// TestUpdateQuoteNewInstrument 测试更新不存在的合约行情
+func TestUpdateQuoteNewInstrument(t *testing.T) {
+	svc := NewInstrumentService(Config{Source: SourceCTP})
+
+	// 更新一个不存在的合约
+	quote := &marketfeed.Quote{
+		InstrumentID:  "ag2406",
+		ExchangeID:    "SHFE",
+		LastPrice:     6000.0,
+		AskPrice1:     6001.0,
+		BidPrice1:     5999.0,
+	}
+	svc.UpdateQuote(quote)
+
+	// 应该自动创建
+	ins := svc.GetInstrument("SHFE.ag2406")
+	if ins == nil {
+		t.Fatal("GetInstrument returned nil, should auto-create")
+	}
+	if ins.LastPrice != 6000.0 {
+		t.Errorf("LastPrice = %f, want 6000.0", ins.LastPrice)
+	}
+	if ins.Symbol != "SHFE.ag2406" {
+		t.Errorf("Symbol = %s, want SHFE.ag2406", ins.Symbol)
+	}
+}
+
+// TestOnQuotes 测试 OnQuotes 回调函数
+func TestOnQuotes(t *testing.T) {
+	svc := NewInstrumentService(Config{Source: SourceCTP})
+
+	quotes := []*marketfeed.Quote{
+		{
+			InstrumentID: "au2406",
+			ExchangeID:   "SHFE",
+			LastPrice:    500.0,
+		},
+		{
+			InstrumentID: "ag2406",
+			ExchangeID:   "SHFE",
+			LastPrice:    6000.0,
+		},
+	}
+
+	// 使用 OnQuotes 回调
+	svc.OnQuotes(quotes)
+
+	// 验证两个合约都被更新
+	ins1 := svc.GetInstrument("SHFE.au2406")
+	if ins1 == nil || ins1.LastPrice != 500.0 {
+		t.Error("OnQuotes failed to update SHFE.au2406")
+	}
+
+	ins2 := svc.GetInstrument("SHFE.ag2406")
+	if ins2 == nil || ins2.LastPrice != 6000.0 {
+		t.Error("OnQuotes failed to update SHFE.ag2406")
+	}
+}
+
+// TestMarkReady 测试 CTP 模式的就绪标记
+func TestMarkReady(t *testing.T) {
+	svc := NewInstrumentService(Config{Source: SourceCTP})
+
+	if svc.IsReady() {
+		t.Error("IsReady should be false before MarkReady")
+	}
+
+	// 添加一些合约
+	svc.SetInstrument("SHFE.au2406", &InstrumentInfo{
+		Symbol:       "SHFE.au2406",
+		ExchangeID:   "SHFE",
+		InstrumentID: "au2406",
+	})
+
+	// 标记就绪
+	svc.MarkReady()
+
+	if !svc.IsReady() {
+		t.Error("IsReady should be true after MarkReady")
+	}
+
+	// 验证交易所映射已生成
+	exchangeID := svc.GuessExchangeID("au2406")
+	if exchangeID != "SHFE" {
+		t.Errorf("GuessExchangeID(au2406) = %s, want SHFE", exchangeID)
 	}
 }

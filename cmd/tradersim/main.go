@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"alpha-trade-gateway/pkg/config"
+	"alpha-trade-gateway/pkg/inslist"
 	"alpha-trade-gateway/pkg/logger"
 	"alpha-trade-gateway/pkg/marketfeed"
 	"alpha-trade-gateway/pkg/tradersim"
@@ -70,20 +71,37 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// ====== 1. 启动 MarketFeed (天勤行情) ======
+	// ====== 1. 创建 InstrumentService (合约信息服务) ======
+	// InstrumentService 是行情数据的唯一来源，tradersim 通过它获取最新行情
+	// tradersim 使用天勤 URL 初始化合约信息
+	insServiceCfg := inslist.Config{
+		Source:     inslist.SourceTianqin,
+		TianqinURL: inslist.DefaultInsListURL,
+	}
+	insService := inslist.NewInstrumentService(insServiceCfg)
+
+	// ====== 2. 启动 MarketFeed (天勤行情) ======
 	marketClient := marketfeed.NewTqMarketClient(*marketURL)
+
+	// 将 MarketFeed 的行情回调连接到 InstrumentService
+	// InstrumentService 提供 OnQuotes 方法，可直接注册
+	marketClient.SetOnQuotes(insService.OnQuotes)
+
 	if err := marketClient.Start(); err != nil {
 		logger.Error("start marketfeed failed", zap.Error(err))
 		os.Exit(1)
 	}
 	logger.Info("marketfeed started")
 
-	// ====== 2. 创建 TraderSim 实例 ======
+	// ====== 3. 创建 TraderSim 实例 ======
 	simConfig := &tradersim.Config{
 		UserFilePath: *userFilePath,
 		BrokerID:     *brokerID,
 	}
 	traderSim := tradersim.New(ctx, simConfig)
+	// 注入 InstrumentService (tradersim 只与 InstrumentService 交互获取行情)
+	traderSim.SetInstrumentService(insService)
+	// 注入 MarketClient (仅用于订阅行情，不用于获取行情数据)
 	traderSim.SetMarketClient(marketClient)
 
 	// 启动模拟交易器
@@ -92,7 +110,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ====== 3. 启动 WebSocket 服务器 ======
+	// ====== 4. 启动 WebSocket 服务器 ======
 	wsServer := websocket.NewServer(ctx, *host, *port, traderSim)
 
 	go func() {

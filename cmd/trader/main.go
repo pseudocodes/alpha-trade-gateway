@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"alpha-trade-gateway/pkg/config"
+	"alpha-trade-gateway/pkg/inslist"
 	"alpha-trade-gateway/pkg/logger"
 	"alpha-trade-gateway/pkg/marketfeed"
 	"alpha-trade-gateway/pkg/trader"
@@ -48,23 +49,38 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// ====== 1. 首先启动 MarketFeed (行情服务) ======
+	// ====== 1. 创建 InstrumentService (合约信息服务) ======
+	// InstrumentService 是行情数据的唯一来源，trader 通过它获取最新行情
+	// 对应 C++ GetInstrument() 全局函数
+	insServiceCfg := inslist.Config{
+		Source:     inslist.SourceCTP, // trader 使用 CTP 查询填充合约信息
+		TianqinURL: inslist.DefaultInsListURL,
+	}
+	insService := inslist.NewInstrumentService(insServiceCfg)
+
+	// ====== 2. 启动 MarketFeed (行情服务) ======
 	// MarketFeed 是基础服务，需要先于 WebSocket 启动
-	// 对应 C++ InstrumentMap 的功能
 	marketClient := createMarketFeedClient()
+
+	// 将 MarketFeed 的行情回调连接到 InstrumentService
+	// InstrumentService 提供 OnQuotes 方法，可直接注册
+	marketClient.SetOnQuotes(insService.OnQuotes)
+
 	if err := marketClient.Start(); err != nil {
 		logger.Error("start marketfeed failed", zap.Error(err))
 		os.Exit(1)
 	}
 	logger.Info("marketfeed started", zap.String("type", config.Global.MarketFeed.Type))
 
-	// ====== 2. 创建 TraderCTP 实例 ======
+	// ====== 3. 创建 TraderCTP 实例 ======
 	// 对应 C++ traderctp tradeCtp(ioc, key)
 	traderCTP := trader.New(ctx)
-	// 注入 MarketFeed 依赖
+	// 注入 InstrumentService (trader 只与 InstrumentService 交互)
+	traderCTP.SetInstrumentService(insService)
+	// 注入 MarketClient (仅用于订阅行情，不用于获取行情数据)
 	traderCTP.SetMarketClient(marketClient)
 
-	// ====== 3. 启动 WebSocket 服务器 ======
+	// ====== 4. 启动 WebSocket 服务器 ======
 	// 对应 C++ 的 IPC 消息队列，这里改为 WebSocket 服务
 	wsServer := websocket.NewServer(ctx, config.Global.Host, config.Global.Port, traderCTP)
 

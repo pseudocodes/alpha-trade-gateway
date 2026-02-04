@@ -108,34 +108,31 @@ func (t *TraderSim) recalculatePositionAndFloatProfit() {
 }
 
 // getLastPrice 获取最新价
+// 从 InstrumentService 获取行情数据（InstrumentService 是行情数据的唯一来源）
 func (t *TraderSim) getLastPrice(symbol string, ins *inslist.InstrumentInfo) float64 {
-	if t.marketClient == nil {
-		return math.NaN()
-	}
-
-	quote := t.marketClient.GetQuote(symbol)
-	if quote == nil {
-		return math.NaN()
+	// 优先使用传入的 ins 参数
+	if ins == nil {
+		// 如果没有传入，从 insService 获取
+		if t.insService == nil {
+			return math.NaN()
+		}
+		ins = t.insService.GetInstrument(symbol)
+		if ins == nil {
+			return math.NaN()
+		}
 	}
 
 	// 交易中：使用最新价
-	if !math.IsNaN(quote.LastPrice) && quote.LastPrice > 0 {
-		return quote.LastPrice
+	if !math.IsNaN(ins.LastPrice) && ins.LastPrice > 0 {
+		return ins.LastPrice
 	}
 
 	// 开盘前：使用昨收盘价或昨结算价
-	if !math.IsNaN(quote.PreClose) && quote.PreClose > 0 {
-		return quote.PreClose
+	if !math.IsNaN(ins.PreClose) && ins.PreClose > 0 {
+		return ins.PreClose
 	}
-	if !math.IsNaN(quote.PreSettlement) && quote.PreSettlement > 0 {
-		return quote.PreSettlement
-	}
-
-	// 从合约信息获取
-	if ins != nil {
-		if !math.IsNaN(ins.PreSettlement) && ins.PreSettlement > 0 {
-			return ins.PreSettlement
-		}
+	if !math.IsNaN(ins.PreSettlement) && ins.PreSettlement > 0 {
+		return ins.PreSettlement
 	}
 
 	return math.NaN()

@@ -505,32 +505,32 @@ func (t *TraderSim) tryOrderMatchNoLock() {
 
 // checkOrderTrade 检查单个订单是否可以成交
 // 对应 C++ CheckOrderTrade
+// 从 InstrumentService 获取行情数据（InstrumentService 是行情数据的唯一来源）
 func (t *TraderSim) checkOrderTrade(order *protocol.Order) {
 	symbol := order.Symbol()
-	ins := t.getInstrument(symbol)
 
-	// 从 marketfeed 获取行情
-	if t.marketClient == nil {
+	// 从 InstrumentService 获取合约信息（包含最新行情）
+	if t.insService == nil {
 		return
 	}
-	quote := t.marketClient.GetQuote(symbol)
-	if quote == nil {
+	ins := t.insService.GetInstrument(symbol)
+	if ins == nil {
 		return
 	}
 
 	// 检查行情有效性
-	if math.IsNaN(quote.AskPrice1) || math.IsNaN(quote.BidPrice1) {
+	if math.IsNaN(ins.AskPrice1) || math.IsNaN(ins.BidPrice1) {
 		return
 	}
-	if quote.AskPrice1 <= 0 || quote.BidPrice1 <= 0 {
+	if ins.AskPrice1 <= 0 || ins.BidPrice1 <= 0 {
 		return
 	}
 
 	// 限价单价格检查
 	if order.PriceType == protocol.PriceTypeLimit {
 		// 获取涨跌停价
-		upperLimit := quote.UpperLimit
-		lowerLimit := quote.LowerLimit
+		upperLimit := ins.UpperLimit
+		lowerLimit := ins.LowerLimit
 
 		// 超过涨停价 - 拒绝
 		if order.Direction == protocol.DirectionBuy &&
@@ -551,16 +551,16 @@ func (t *TraderSim) checkOrderTrade(order *protocol.Order) {
 	// 买单撮合条件
 	if order.Direction == protocol.DirectionBuy {
 		if order.PriceType == protocol.PriceTypeAny ||
-			order.LimitPrice >= quote.AskPrice1 {
-			t.doTrade(order, order.VolumeLeft, quote.AskPrice1, ins)
+			order.LimitPrice >= ins.AskPrice1 {
+			t.doTrade(order, order.VolumeLeft, ins.AskPrice1, ins)
 		}
 	}
 
 	// 卖单撮合条件
 	if order.Direction == protocol.DirectionSell {
 		if order.PriceType == protocol.PriceTypeAny ||
-			order.LimitPrice <= quote.BidPrice1 {
-			t.doTrade(order, order.VolumeLeft, quote.BidPrice1, ins)
+			order.LimitPrice <= ins.BidPrice1 {
+			t.doTrade(order, order.VolumeLeft, ins.BidPrice1, ins)
 		}
 	}
 }

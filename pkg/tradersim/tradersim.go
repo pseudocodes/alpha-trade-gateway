@@ -140,8 +140,11 @@ func (t *TraderSim) SetMsgSender(sender func(connID int, msg string)) {
 // SetMarketClient 设置行情客户端
 func (t *TraderSim) SetMarketClient(client marketfeed.MarketClient) {
 	t.marketClient = client
-	// 创建合约信息服务
-	t.insService = inslist.NewInstrumentService(client)
+}
+
+// SetInstrumentService 设置合约信息服务
+func (t *TraderSim) SetInstrumentService(svc *inslist.InstrumentService) {
+	t.insService = svc
 }
 
 // Start 启动模拟交易器
