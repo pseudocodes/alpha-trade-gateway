@@ -48,23 +48,31 @@ func (s *CtpSpi) ReqUserPasswordUpdate(oldPassword, newPassword string) {
 
 	ret := s.api.ReqUserPasswordUpdate(req, s.nextRequestID())
 	logger.Info("ReqUserPasswordUpdate", zap.Int("ret", ret))
+
+	// 对应 C++ if (0 != r) OutputNotifyAllSycn(351,u8"修改密码请求发送失败!","WARNING")
+	if ret != 0 {
+		s.trader.outputNotifyAll(351, "修改密码请求发送失败!", "WARNING")
+	}
 }
 
 // OnRspUserPasswordUpdate 密码修改响应
+// 对应 C++ traderctp::OnRspUserPasswordUpdate
 func (s *CtpSpi) OnRspUserPasswordUpdate(pUserPasswordUpdate *thost.CThostFtdcUserPasswordUpdateField,
 	pRspInfo *thost.CThostFtdcRspInfoField, nRequestID int, bIsLast bool) {
 
-	if s.isErrorRspInfo(pRspInfo) {
-		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), gbkToUtf8(pRspInfo.ErrorMsg[:]), "ERROR")
+	if pRspInfo != nil && pRspInfo.ErrorID != 0 {
+		// 对应 C++ OutputNotifySycn(m_loging_connectId,pRspInfo->ErrorID, u8"修改密码失败," + GBKToUTF8(pRspInfo->ErrorMsg), "WARNING")
+		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), "修改密码失败,"+gbkToUtf8(pRspInfo.ErrorMsg[:]), "WARNING")
 		return
 	}
 
+	// 对应 C++ OutputNotifySycn(m_loging_connectId,326, u8"修改密码成功")
 	logger.Info("password changed successfully")
-	s.trader.outputNotifyAll(0, "密码修改成功", "INFO")
+	s.trader.outputNotifyAll(326, "修改密码成功", "INFO")
 }
 
 // OnRtnTradingNotice 交易通知
-// 对应 C++ traderctp::OnRtnTradingNotice
+// 对应 C++ traderctp::OnRtnTradingNotice -> ProcessOnRtnTradingNotice
 func (s *CtpSpi) OnRtnTradingNotice(pTradingNoticeInfo *thost.CThostFtdcTradingNoticeInfoField) {
 	if pTradingNoticeInfo == nil {
 		return
@@ -73,7 +81,10 @@ func (s *CtpSpi) OnRtnTradingNotice(pTradingNoticeInfo *thost.CThostFtdcTradingN
 	content := gbkToUtf8(pTradingNoticeInfo.FieldContent[:])
 	logger.Info("trading notice", zap.String("content", content))
 
-	s.trader.outputNotifyAll(326, content, "INFO")
+	// 对应 C++ OutputNotifyAllSycn(332,s)
+	if content != "" {
+		s.trader.outputNotifyAll(332, content, "INFO")
+	}
 }
 
 // OnRtnInstrumentStatus 合约状态通知
@@ -99,7 +110,8 @@ func (s *CtpSpi) OnRtnInstrumentStatus(pInstrumentStatus *thost.CThostFtdcInstru
 func (t *TraderCTP) handleConfirmSettlementFull(connID int) {
 	loginState := t.getState()
 	if loginState == StateInit || loginState == StateStopped || loginState == StateStopping {
-		t.outputNotify(connID, 336, "请先登录", "WARNING")
+		// 对应 C++ OutputNotifyAllSycn(336, u8"当前时间不支持确认结算单!", "WARNING")
+		t.outputNotify(connID, 336, "当前时间不支持确认结算单!", "WARNING")
 		return
 	}
 
@@ -111,7 +123,8 @@ func (t *TraderCTP) handleConfirmSettlementFull(connID int) {
 // 对应 C++ aid == "qry_settlement_info" 处理
 func (t *TraderCTP) handleQrySettlementInfoFull(connID int, msg string) {
 	if !t.isLoggedIn() {
-		t.outputNotify(connID, 337, "请先登录", "WARNING")
+		// 对应 C++ OutputNotifyAllSycn(337, u8"当前时间不支持查询历史结算单!", "WARNING")
+		t.outputNotify(connID, 337, "当前时间不支持查询历史结算单!", "WARNING")
 		return
 	}
 
@@ -216,11 +229,13 @@ func (s *CtpSpi) ReqTradingAccountPasswordUpdate(oldPassword, newPassword string
 func (s *CtpSpi) OnRspTradingAccountPasswordUpdate(pTradingAccountPasswordUpdate *thost.CThostFtdcTradingAccountPasswordUpdateField,
 	pRspInfo *thost.CThostFtdcRspInfoField, nRequestID int, bIsLast bool) {
 
-	if s.isErrorRspInfo(pRspInfo) {
-		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), gbkToUtf8(pRspInfo.ErrorMsg[:]), "ERROR")
+	if pRspInfo != nil && pRspInfo.ErrorID != 0 {
+		// 对应 C++ OutputNotifySycn(m_loging_connectId, pRspInfo->ErrorID, u8"修改资金密码失败," + GBKToUTF8(pRspInfo->ErrorMsg), "WARNING")
+		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), "修改资金密码失败,"+gbkToUtf8(pRspInfo.ErrorMsg[:]), "WARNING")
 		return
 	}
 
+	// 对应 C++ OutputNotifySycn(m_loging_connectId, 363, u8"修改资金密码成功")
 	logger.Info("trading account password changed successfully")
-	s.trader.outputNotifyAll(0, "资金密码修改成功", "INFO")
+	s.trader.outputNotifyAll(363, "修改资金密码成功", "INFO")
 }

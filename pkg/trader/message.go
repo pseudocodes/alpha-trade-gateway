@@ -98,6 +98,11 @@ func (t *TraderCTP) processMessage(connID int, msg string) {
 		t.handleQryAccountRegister(connID)
 
 	case AidChangeTradingAccountPassword:
+		// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(362, u8"当前时间不支持修改资金密码!", "WARNING")
+		if t.ctpApi == nil {
+			t.outputNotifyAll(362, "当前时间不支持修改资金密码!", "WARNING")
+			return
+		}
 		t.handleChangeTradingAccountPassword(connID, msg)
 
 	case AidReqStartCtp:
@@ -180,30 +185,55 @@ func (t *TraderCTP) handlePeekMessage(connID int) {
 // handleInsertOrder 处理下单请求
 // 对应 C++ aid == "insert_order" 处理
 func (t *TraderCTP) handleInsertOrder(connID int, msg string) {
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(333, u8"当前时间不支持下单!", "WARNING")
+	if t.ctpApi == nil {
+		t.outputNotifyAll(333, "当前时间不支持下单!", "WARNING")
+		return
+	}
 	t.handleInsertOrderFull(connID, msg)
 }
 
 // handleCancelOrder 处理撤单请求
 // 对应 C++ aid == "cancel_order" 处理
 func (t *TraderCTP) handleCancelOrder(connID int, msg string) {
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(334, u8"当前时间不支持撤单!", "WARNING")
+	if t.ctpApi == nil {
+		t.outputNotifyAll(334, "当前时间不支持撤单!", "WARNING")
+		return
+	}
 	t.handleCancelOrderFull(connID, msg)
 }
 
 // handleReqTransfer 处理转账请求
 // 对应 C++ aid == "req_transfer" 处理
 func (t *TraderCTP) handleReqTransfer(connID int, msg string) {
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(335, u8"当前时间不支持转账!", "WARNING")
+	if t.ctpApi == nil {
+		t.outputNotifyAll(335, "当前时间不支持转账!", "WARNING")
+		return
+	}
 	t.handleReqTransferFull(connID, msg)
 }
 
 // handleConfirmSettlement 处理确认结算单请求
 // 对应 C++ aid == "confirm_settlement" 处理
 func (t *TraderCTP) handleConfirmSettlement(connID int, msg string) {
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(336, u8"当前时间不支持确认结算单!", "WARNING")
+	if t.ctpApi == nil {
+		t.outputNotifyAll(336, "当前时间不支持确认结算单!", "WARNING")
+		return
+	}
 	t.handleConfirmSettlementFull(connID)
 }
 
 // handleQrySettlementInfo 处理查询结算单请求
 // 对应 C++ aid == "qry_settlement_info" 处理
 func (t *TraderCTP) handleQrySettlementInfo(connID int, msg string) {
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(337, u8"当前时间不支持查询历史结算单!", "WARNING")
+	if t.ctpApi == nil {
+		t.outputNotifyAll(337, "当前时间不支持查询历史结算单!", "WARNING")
+		return
+	}
 	t.handleQrySettlementInfoFull(connID, msg)
 }
 
@@ -270,11 +300,7 @@ func (t *TraderCTP) outputNotifyAll(code int64, content string, level string) {
 func (t *TraderCTP) handleQryAccountInfo(connID int) {
 	logger.Info("handling qry_account_info request", zap.Int("conn_id", connID))
 
-	if !t.isLoggedIn() {
-		t.outputNotify(connID, 360, "请先登录", "WARNING")
-		return
-	}
-
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(360, u8"当前时间不支持查询资金账号!", "WARNING")
 	if t.ctpApi == nil {
 		t.outputNotifyAll(360, "当前时间不支持查询资金账号!", "WARNING")
 		return
@@ -289,11 +315,7 @@ func (t *TraderCTP) handleQryAccountInfo(connID int) {
 func (t *TraderCTP) handleQryTransferSerial(connID int) {
 	logger.Info("handling qry_transfer_serial request", zap.Int("conn_id", connID))
 
-	if !t.isLoggedIn() {
-		t.outputNotify(connID, 359, "请先登录", "WARNING")
-		return
-	}
-
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(359, u8"当前时间不支持查询转账记录!", "WARNING")
 	if t.ctpApi == nil {
 		t.outputNotifyAll(359, "当前时间不支持查询转账记录!", "WARNING")
 		return
@@ -308,11 +330,7 @@ func (t *TraderCTP) handleQryTransferSerial(connID int) {
 func (t *TraderCTP) handleQryAccountRegister(connID int) {
 	logger.Info("handling qry_account_register request", zap.Int("conn_id", connID))
 
-	if !t.isLoggedIn() {
-		t.outputNotify(connID, 361, "请先登录", "WARNING")
-		return
-	}
-
+	// 对应 C++ if (nullptr == m_pTdApi) OutputNotifyAllSycn(361, u8"当前时间不支持查询银期签约关系!", "WARNING")
 	if t.ctpApi == nil {
 		t.outputNotifyAll(361, "当前时间不支持查询银期签约关系!", "WARNING")
 		return

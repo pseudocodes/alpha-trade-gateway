@@ -17,7 +17,8 @@ import (
 // 对应 C++ traderctp::OnClientReqTransfer
 func (t *TraderCTP) handleReqTransferFull(connID int, msg string) {
 	if !t.isLoggedIn() {
-		t.outputNotify(connID, 335, "请先登录", "WARNING")
+		// 对应 C++ OutputNotifyAllSycn(335, u8"当前时间不支持转账!", "WARNING")
+		t.outputNotify(connID, 335, "当前时间不支持转账!", "WARNING")
 		return
 	}
 
@@ -66,6 +67,11 @@ func (s *CtpSpi) ReqFromBankToFutureByFuture(bankID, bankPassword, futurePasswor
 		zap.Int("ret", ret),
 		zap.Float64("amount", amount),
 	)
+
+	// 对应 C++ if (0 != r) OutputNotifyAllSycn(352, u8"银期转账请求发送失败!", "WARNING")
+	if ret != 0 {
+		s.trader.outputNotifyAll(352, "银期转账请求发送失败!", "WARNING")
+	}
 }
 
 // ReqFromFutureToBankByFuture 期货转银行
@@ -87,6 +93,11 @@ func (s *CtpSpi) ReqFromFutureToBankByFuture(bankID, bankPassword, futurePasswor
 		zap.Int("ret", ret),
 		zap.Float64("amount", amount),
 	)
+
+	// 对应 C++ if (0 != r) OutputNotifyAllSycn(352,u8"银期转账请求发送失败!","WARNING")
+	if ret != 0 {
+		s.trader.outputNotifyAll(352, "银期转账请求发送失败!", "WARNING")
+	}
 }
 
 // OnRtnFromBankToFutureByFuture 银转期通知
@@ -108,8 +119,10 @@ func (s *CtpSpi) handleTransferResult(pRspTransfer *thost.CThostFtdcRspTransferF
 	}
 
 	direction := "银行转期货"
+	funName := "OnRtnFromBankToFutureByFuture"
 	if !isBankToFuture {
 		direction = "期货转银行"
+		funName = "OnRtnFromFutureToBankByFuture"
 	}
 
 	amount := float64(pRspTransfer.TradeAmount)
@@ -117,19 +130,23 @@ func (s *CtpSpi) handleTransferResult(pRspTransfer *thost.CThostFtdcRspTransferF
 	errorMsg := gbkToUtf8(pRspTransfer.ErrorMsg[:])
 
 	if errorID != 0 {
-		logger.Error("transfer failed",
+		logger.Error(funName,
+			zap.String("fun", funName),
 			zap.String("direction", direction),
 			zap.Float64("amount", amount),
-			zap.Int("error_id", errorID),
-			zap.String("error_msg", errorMsg),
+			zap.Int("errid", errorID),
+			zap.String("errmsg", errorMsg),
 		)
-		s.trader.outputNotifyAll(int64(errorID), errorMsg, "ERROR")
+		// 对应 C++ OutputNotifyAllSycn(pRspTransfer->ErrorID, u8"银期错误," + GBKToUTF8(pRspTransfer->ErrorMsg), "WARNING")
+		s.trader.outputNotifyAll(int64(errorID), "银期错误,"+errorMsg, "WARNING")
 	} else {
-		logger.Info("transfer success",
+		logger.Info(funName,
+			zap.String("fun", funName),
 			zap.String("direction", direction),
 			zap.Float64("amount", amount),
 		)
-		s.trader.outputNotifyAll(0, direction+"成功，金额: "+formatTransferAmount(amount), "INFO")
+		// 对应 C++ OutputNotifyAllSycn(327,u8"转账成功")
+		s.trader.outputNotifyAll(327, "转账成功", "INFO")
 
 		// 请求刷新账户 (对应 C++ m_req_account_id++)
 		go s.trader.requestRefreshAfterTransfer()
@@ -234,9 +251,11 @@ func (s *CtpSpi) handleTransferError(pReqTransfer *thost.CThostFtdcReqTransferFi
 		return
 	}
 
-	direction := "银行转期货"
+	direction := "银行资金转期货"
+	funName := "OnErrRtnBankToFutureByFuture"
 	if !isBankToFuture {
-		direction = "期货转银行"
+		direction = "期货资金转银行"
+		funName = "OnErrRtnFutureToBankByFuture"
 	}
 
 	amount := float64(pReqTransfer.TradeAmount)
@@ -248,14 +267,16 @@ func (s *CtpSpi) handleTransferError(pReqTransfer *thost.CThostFtdcReqTransferFi
 		errorMsg = gbkToUtf8(pRspInfo.ErrorMsg[:])
 	}
 
-	logger.Error("transfer error",
+	logger.Error(funName,
+		zap.String("fun", funName),
 		zap.String("direction", direction),
 		zap.Float64("amount", amount),
-		zap.Int("error_id", errorID),
-		zap.String("error_msg", errorMsg),
+		zap.Int("errid", errorID),
+		zap.String("errmsg", errorMsg),
 	)
 
-	s.trader.outputNotifyAll(int64(errorID), direction+"失败: "+errorMsg, "ERROR")
+	// 对应 C++ OutputNotifyAllSycn(pRspInfo->ErrorID, u8"银行资金转期货错误," / u8"期货资金转银行错误," + GBKToUTF8(pRspInfo->ErrorMsg), "WARNING")
+	s.trader.outputNotifyAll(int64(errorID), direction+"错误,"+errorMsg, "WARNING")
 }
 
 // ==================== 银期签约关系查询 (Phase 3: Banking Features) ====================

@@ -20,7 +20,8 @@ import (
 // 支持 C++ 风格的字符串枚举值和整数枚举值两种报文格式
 func (t *TraderCTP) handleInsertOrderFull(connID int, msg string) {
 	if !t.isLoggedIn() {
-		t.outputNotify(connID, 333, "请先登录", "WARNING")
+		// 对应 C++ OutputNotifyAllSycn(333, u8"当前时间不支持下单!", "WARNING")
+		t.outputNotify(connID, 333, "当前时间不支持下单!", "WARNING")
 		return
 	}
 
@@ -265,9 +266,14 @@ func (s *CtpSpi) OnRspOrderInsert(pInputOrder *thost.CThostFtdcInputOrderField,
 	if pInputOrder != nil {
 		instrumentID := bytesToString(pInputOrder.InstrumentID[:])
 		orderRef := bytesToString(pInputOrder.OrderRef[:])
-		logger.Error("order insert failed",
+		logger.Error("OnRspOrderInsert",
+			zap.String("fun", "OnRspOrderInsert"),
 			zap.String("instrument_id", instrumentID),
 			zap.String("order_ref", orderRef),
+			zap.Int("errid", int(pRspInfo.ErrorID)),
+			zap.String("errmsg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+			zap.Bool("is_last", bIsLast),
+			zap.Int("request_id", nRequestID),
 		)
 	}
 
@@ -329,8 +335,23 @@ func (s *CtpSpi) OnErrRtnOrderInsert(pInputOrder *thost.CThostFtdcInputOrderFiel
 
 	if pInputOrder != nil {
 		instrumentID := bytesToString(pInputOrder.InstrumentID[:])
-		logger.Error("order insert error",
+		orderRef := bytesToString(pInputOrder.OrderRef[:])
+		logger.Error("OnErrRtnOrderInsert",
+			zap.String("fun", "OnErrRtnOrderInsert"),
 			zap.String("instrument_id", instrumentID),
+			zap.String("order_ref", orderRef),
+			zap.Int("errid", func() int {
+				if pRspInfo != nil {
+					return int(pRspInfo.ErrorID)
+				}
+				return -999
+			}()),
+			zap.String("errmsg", func() string {
+				if pRspInfo != nil {
+					return gbkToUtf8(pRspInfo.ErrorMsg[:])
+				}
+				return ""
+			}()),
 		)
 	}
 
@@ -351,7 +372,8 @@ func (s *CtpSpi) makeOrderID(pOrder *thost.CThostFtdcOrderField) string {
 // 对应 C++ traderctp::OnClientReqCancelOrder
 func (t *TraderCTP) handleCancelOrderFull(connID int, msg string) {
 	if !t.isLoggedIn() {
-		t.outputNotify(connID, 334, "请先登录", "WARNING")
+		// 对应 C++ OutputNotifyAllSycn(334, u8"当前时间不支持撤单!", "WARNING")
+		t.outputNotify(connID, 334, "当前时间不支持撤单!", "WARNING")
 		return
 	}
 
@@ -431,9 +453,12 @@ func (s *CtpSpi) OnRspOrderAction(pInputOrderAction *thost.CThostFtdcInputOrderA
 	pRspInfo *thost.CThostFtdcRspInfoField, nRequestID int, bIsLast bool) {
 
 	if pRspInfo != nil && pRspInfo.ErrorID != 0 {
-		logger.Error("order action failed",
-			zap.Int("error_id", int(pRspInfo.ErrorID)),
-			zap.String("error_msg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+		logger.Error("OnRspOrderAction",
+			zap.String("fun", "OnRspOrderAction"),
+			zap.Int("errid", int(pRspInfo.ErrorID)),
+			zap.String("errmsg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+			zap.Bool("is_last", bIsLast),
+			zap.Int("request_id", nRequestID),
 		)
 		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), gbkToUtf8(pRspInfo.ErrorMsg[:]), "ERROR")
 	}
@@ -444,6 +469,11 @@ func (s *CtpSpi) OnErrRtnOrderAction(pOrderAction *thost.CThostFtdcOrderActionFi
 	pRspInfo *thost.CThostFtdcRspInfoField) {
 
 	if pRspInfo != nil && pRspInfo.ErrorID != 0 {
+		logger.Error("OnErrRtnOrderAction",
+			zap.String("fun", "OnErrRtnOrderAction"),
+			zap.Int("errid", int(pRspInfo.ErrorID)),
+			zap.String("errmsg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+		)
 		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), gbkToUtf8(pRspInfo.ErrorMsg[:]), "ERROR")
 	}
 }

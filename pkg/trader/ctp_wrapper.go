@@ -85,29 +85,31 @@ func (s *CtpSpi) nextOrderRef() string {
 // OnFrontConnected 前置连接成功回调
 // 对应 C++ traderctp::OnFrontConnected
 func (s *CtpSpi) OnFrontConnected() {
-	logger.Info("CTP front connected")
+	logger.Info("OnFrontConnected",
+		zap.String("fun", "OnFrontConnected"),
+	)
 	s.trader.setState(StateConnected)
 	if s.trader.isLoggedIn() {
 		// 已登录，可能是重连
-		logger.Info("already logged in, re-initializing user data")
-		s.trader.outputNotifyAll(321, "已经重新连接到交易前置", "INFO")
-
+		// 对应 C++ OutputNotifyAllSycn(320,u8"已经重新连接到交易前置")
+		logger.Info("already logged in, reconnecting")
+		s.trader.outputNotifyAll(320, "已经重新连接到交易前置", "INFO")
+	} else {
+		// 首次连接
+		// 对应 C++ OutputNotifySycn(m_loging_connectId,321,u8"已经连接到交易前置")
+		s.trader.outputNotifyAll(321, "已经连接到交易前置", "INFO")
 	}
-
-	// 通知客户端已连接到交易前置
-	// 对应 C++ OutputNotifySycn(m_loging_connectId,321,u8"已经连接到交易前置")
-	s.trader.outputNotifyAll(321, "已经连接到交易前置", "INFO")
 
 	// 发送认证请求
 	// 对应 C++ ReqAuthenticate
 	s.reqAuthenticate()
-	// s.trader.sendAuthRequest()
 }
 
 // OnFrontDisconnected 前置断开回调
 // 对应 C++ traderctp::OnFrontDisconnected
 func (s *CtpSpi) OnFrontDisconnected(nReason int) {
-	logger.Warn("CTP front disconnected",
+	logger.Warn("OnFrontDisconnected",
+		zap.String("fun", "OnFrontDisconnected"),
 		zap.Int("reason", nReason),
 	)
 	if !s.trader.isLoggedIn() {
@@ -150,15 +152,22 @@ func (s *CtpSpi) OnRspAuthenticate(pRspAuthenticateField *thost.CThostFtdcRspAut
 	pRspInfo *thost.CThostFtdcRspInfoField, nRequestID int, bIsLast bool) {
 
 	if s.isErrorRspInfo(pRspInfo) {
-		logger.Error("authenticate failed",
-			zap.Int("error_id", int(pRspInfo.ErrorID)),
-			zap.String("error_msg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+		logger.Error("OnRspAuthenticate",
+			zap.String("fun", "OnRspAuthenticate"),
+			zap.Int("errid", int(pRspInfo.ErrorID)),
+			zap.String("errmsg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+			zap.Bool("is_last", bIsLast),
+			zap.Int("request_id", nRequestID),
 		)
 		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), gbkToUtf8(pRspInfo.ErrorMsg[:]), "ERROR")
 		return
 	}
 
-	logger.Info("authenticate success")
+	logger.Info("OnRspAuthenticate",
+		zap.String("fun", "OnRspAuthenticate"),
+		zap.Bool("is_last", bIsLast),
+		zap.Int("request_id", nRequestID),
+	)
 	s.trader.setState(StateAuthenticated)
 	s.trader.tryReqAuthenticateTimes = 0
 
@@ -192,9 +201,12 @@ func (s *CtpSpi) OnRspUserLogin(pRspUserLogin *thost.CThostFtdcRspUserLoginField
 	pRspInfo *thost.CThostFtdcRspInfoField, nRequestID int, bIsLast bool) {
 
 	if s.isErrorRspInfo(pRspInfo) {
-		logger.Error("login failed",
-			zap.Int("error_id", int(pRspInfo.ErrorID)),
-			zap.String("error_msg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+		logger.Error("OnRspUserLogin",
+			zap.String("fun", "OnRspUserLogin"),
+			zap.Int("errid", int(pRspInfo.ErrorID)),
+			zap.String("errmsg", gbkToUtf8(pRspInfo.ErrorMsg[:])),
+			zap.Bool("is_last", bIsLast),
+			zap.Int("request_id", nRequestID),
 		)
 		errMsg := "交易服务器登录失败," + pRspInfo.ErrorMsg.GBString()
 		s.trader.outputNotifyAll(int64(pRspInfo.ErrorID), gbkToUtf8([]byte(errMsg)), "WARNING")
@@ -217,16 +229,20 @@ func (s *CtpSpi) OnRspUserLogin(pRspUserLogin *thost.CThostFtdcRspUserLoginField
 
 	tradingDay := bytesToString(pRspUserLogin.TradingDay[:])
 
-	logger.Info("login success",
+	logger.Info("OnRspUserLogin",
+		zap.String("fun", "OnRspUserLogin"),
 		zap.Int("front_id", s.frontID),
 		zap.Int("session_id", s.sessionID),
 		zap.String("trading_day", tradingDay),
 		zap.String("sys_version", bytesToString(pRspUserLogin.SysVersion[:])),
+		zap.Bool("is_last", bIsLast),
+		zap.Int("request_id", nRequestID),
 	)
 	if s.trader.getState() >= StateLoggedIn {
 		// 已登录，可能是重连
-		logger.Info("already logged in, re-initializing user data")
-		s.trader.outputNotifyAll(321, "已经重新连接到交易前置", "INFO")
+		// 对应 C++ OutputNotifyAllSycn(323,u8"交易服务器重登录成功")
+		logger.Info("already logged in, re-login success")
+		s.trader.outputNotifyAll(323, "交易服务器重登录成功", "INFO")
 	} else {
 		s.trader.setState(StateLoggedIn)
 	}
