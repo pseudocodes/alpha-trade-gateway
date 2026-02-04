@@ -108,10 +108,10 @@ func (c *TqMarketClient) doRecv() {
 				}
 				quotes := []*Quote{}
 				jsdata.ForEach(func(symbol, value gjson.Result) bool {
-					quote := c.parseQuote(symbol.String(), value)
+					// 天勤行情是差分数据，需要合并到缓存的 quote
+					quote := c.getOrCreateQuote(symbol.String())
+					c.mergeQuoteDiff(quote, value)
 					quotes = append(quotes, quote)
-					// 缓存行情
-					c.quotesMap.Store(symbol.String(), quote)
 					return true
 				})
 				// 触发回调（由外部注册，如 InstrumentService）
@@ -127,10 +127,26 @@ func (c *TqMarketClient) doRecv() {
 	}
 }
 
-func (c *TqMarketClient) parseQuote(symbol string, value gjson.Result) *Quote {
+// getOrCreateQuote 获取或创建 quote 缓存
+func (c *TqMarketClient) getOrCreateQuote(symbol string) *Quote {
+	if v, ok := c.quotesMap.Load(symbol); ok {
+		return v.(*Quote)
+	}
+	// 创建新的 quote 并缓存
 	quote := NewQuote()
 	quote.InstrumentID = symbol
-	// logger.Warn("parsing quote", zap.String("symbol", symbol), zap.String("value", value.Raw))
+	// 解析 symbol 获取 ExchangeID
+	if idx := strings.Index(symbol, "."); idx > 0 {
+		quote.ExchangeID = symbol[:idx]
+		quote.InstrumentID = symbol[idx+1:]
+	}
+	c.quotesMap.Store(symbol, quote)
+	return quote
+}
+
+// mergeQuoteDiff 合并差分行情数据到 quote
+// 天勤推送的是差分数据，只有变化的字段才会被推送
+func (c *TqMarketClient) mergeQuoteDiff(quote *Quote, value gjson.Result) {
 	value.ForEach(func(k, v gjson.Result) bool {
 		if v.Type == gjson.Null {
 			return true
@@ -188,12 +204,21 @@ func (c *TqMarketClient) parseQuote(symbol string, value gjson.Result) *Quote {
 			if v.Type == gjson.Number {
 				quote.OpenInterest = int(v.Int())
 			}
-		default:
-			// logger.Warn("unknown quote field", zap.String("field", k.String()), zap.String("value", v.String()))
+		case "ask_volume1":
+			if v.Type == gjson.Number {
+				quote.AskVolume1 = int(v.Int())
+			}
+		case "bid_volume1":
+			if v.Type == gjson.Number {
+				quote.BidVolume1 = int(v.Int())
+			}
+		case "datetime":
+			if v.Type == gjson.String {
+				quote.Datetime = v.String()
+			}
 		}
 		return true
 	})
-	return quote
 }
 
 // Subscribe 订阅行情
