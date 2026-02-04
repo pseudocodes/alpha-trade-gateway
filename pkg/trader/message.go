@@ -260,11 +260,9 @@ func (t *TraderCTP) sendUserData(connID int) {
 
 	// 先更新所有持仓的盈亏 (使用最新行情)
 	// 对应 C++ SendUserDataImd 中重算持仓盈亏的逻辑 (4453-4749行)
-	t.updateAllPositionProfitsNoLock()
-
 	// 重算账户盈亏
 	// 对应 C++ SendUserDataImd 中重算资金账户逻辑 (4751-4807行)
-	t.recalculateAccountProfit()
+	t.recalculatePositionAndAccountProfit()
 
 	// 构建完整的用户数据消息
 	// 对应 C++ SendUserDataImd 中构建数据包逻辑 (4810-4831行)

@@ -340,7 +340,11 @@ func (t *TraderCTP) sendAllUserData() {
 	if t.user == nil {
 		return
 	}
-	t.recalculateAccountProfit()
+
+	// 统一重算持仓盈亏和账户盈亏
+	// 类似 tradersim 的 recalculatePositionAndFloatProfit
+	// 在发送数据前统一计算，而不是在行情回调中频繁计算
+	t.recalculatePositionAndAccountProfit()
 
 	// 构建 diff 消息 (只包含变化的数据)
 	msg := t.buildUserDataMsg()

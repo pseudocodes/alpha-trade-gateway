@@ -3,6 +3,7 @@
 package trader
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/pseudocodes/go2ctp/thost"
@@ -15,6 +16,14 @@ import (
 // formatFloat 格式化浮点数
 func formatFloat(f float64) string {
 	return strconv.FormatFloat(f, 'f', 2, 64)
+}
+
+// round3 保留3位小数
+func round3(f float64) float64 {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return f
+	}
+	return math.Round(f*1000) / 1000
 }
 
 // handleChangePasswordFull 处理密码修改请求

@@ -494,40 +494,22 @@ func (t *TraderCTP) subscribeSymbolIfNeeded(symbol string) {
 }
 
 // onQuotesUpdate 行情更新回调
+// 注意：此回调仅用于触发数据变化标记，不再进行盈亏计算
+// 盈亏计算统一在 recalculatePositionAndAccountProfit() 中完成
 // 对应 C++ 中 InstrumentMap 数据更新时的处理
 func (t *TraderCTP) onQuotesUpdate(quotes []*marketfeed.Quote) {
-	t.userMu.Lock()
-	defer t.userMu.Unlock()
-
-	if t.user == nil {
-		return
-	}
-
-	changed := false
+	// 行情回调不再进行盈亏计算
+	// 盈亏计算统一在 sendAllUserData() 调用时通过 recalculatePositionAndAccountProfit() 完成
+	// 这样可以避免高频行情下的频繁计算
 	for _, quote := range quotes {
-		logger.Debug("quote", zap.String("instrument_id", quote.InstrumentID), zap.String("exchange_id", quote.ExchangeID))
-
-		var symbol = quote.InstrumentID
-		if !strings.Contains(symbol, ".") {
-			ins := t.GetInstrument(quote.InstrumentID)
-			symbol = ins.ExchangeID + "." + ins.InstrumentID
-		}
-		if pos, ok := t.user.Positions[symbol]; ok {
-			if t.updatePositionProfit(pos, quote) {
-				changed = true
-			}
-		}
-	}
-
-	if changed {
-		// 重新计算账户盈亏
-		t.recalculateAccountProfit()
+		logger.Debug("quote received", zap.String("instrument_id", quote.InstrumentID), zap.String("exchange_id", quote.ExchangeID))
 	}
 }
 
-// updatePositionProfit 更新持仓盈亏
+// updatePositionProfitWithQuote 使用行情数据更新单个持仓盈亏 (内部函数，不加锁)
 // 对应 C++ tradectp.cpp 中的持仓盈亏计算逻辑 (4048-4320行)
-func (t *TraderCTP) updatePositionProfit(pos *protocol.Position, quote *marketfeed.Quote) bool {
+// 返回值: 是否有变化
+func (t *TraderCTP) updatePositionProfitWithQuote(pos *protocol.Position, quote *marketfeed.Quote) bool {
 	if pos == nil || quote == nil {
 		return false
 	}
@@ -535,12 +517,8 @@ func (t *TraderCTP) updatePositionProfit(pos *protocol.Position, quote *marketfe
 	// 如果 pos.Ins 为空，尝试从 instrumentMap 获取
 	// 对应 C++ ps.ins = GetInstrument(symbol)
 	if pos.Ins == nil {
-		symbol := pos.ExchangeID + "." + pos.InstrumentID
 		pos.Ins = t.GetInstrument(pos.InstrumentID)
 		if pos.Ins == nil {
-			logger.Warn("instrument not found for position",
-				zap.String("symbol", symbol),
-			)
 			return false
 		}
 	}
@@ -594,16 +572,15 @@ func (t *TraderCTP) updatePositionProfit(pos *protocol.Position, quote *marketfe
 	}
 
 	pos.LastPrice = lastPrice
-	logger.Debug("last price updated", zap.String("instrument_id", pos.InstrumentID), zap.Float64("last_price", lastPrice))
 
-	// 计算浮动盈亏
+	// 计算浮动盈亏 (保留3位小数)
 	// float_profit_long = last_price * volume_long * volume_multiple - open_cost_long
-	pos.FloatProfitLong = lastPrice*float64(pos.VolumeLong)*volumeMultiple - pos.OpenCostLong
+	pos.FloatProfitLong = round3(lastPrice*float64(pos.VolumeLong)*volumeMultiple - pos.OpenCostLong)
 	// float_profit_short = open_cost_short - last_price * volume_short * volume_multiple
-	pos.FloatProfitShort = pos.OpenCostShort - lastPrice*float64(pos.VolumeShort)*volumeMultiple
-	pos.FloatProfit = pos.FloatProfitLong + pos.FloatProfitShort
+	pos.FloatProfitShort = round3(pos.OpenCostShort - lastPrice*float64(pos.VolumeShort)*volumeMultiple)
+	pos.FloatProfit = round3(pos.FloatProfitLong + pos.FloatProfitShort)
 
-	// 计算持仓盈亏
+	// 计算持仓盈亏 (保留3位小数)
 	// 期权合约的持仓盈亏设为0，与C++一致
 	isOption := pos.Ins != nil && pos.Ins.ProductClass == protocol.ProductClassOptions
 	if isOption {
@@ -612,24 +589,23 @@ func (t *TraderCTP) updatePositionProfit(pos *protocol.Position, quote *marketfe
 		pos.PositionProfit = 0
 	} else {
 		// position_profit_long = last_price * volume_long * volume_multiple - position_cost_long
-		pos.PositionProfitLong = lastPrice*float64(pos.VolumeLong)*volumeMultiple - pos.PositionCostLong
+		pos.PositionProfitLong = round3(lastPrice*float64(pos.VolumeLong)*volumeMultiple - pos.PositionCostLong)
 		// position_profit_short = position_cost_short - last_price * volume_short * volume_multiple
-		pos.PositionProfitShort = pos.PositionCostShort - lastPrice*float64(pos.VolumeShort)*volumeMultiple
-		pos.PositionProfit = pos.PositionProfitLong + pos.PositionProfitShort
+		pos.PositionProfitShort = round3(pos.PositionCostShort - lastPrice*float64(pos.VolumeShort)*volumeMultiple)
+		pos.PositionProfit = round3(pos.PositionProfitLong + pos.PositionProfitShort)
 	}
 
-	// 计算开仓均价和持仓均价
+	// 计算开仓均价和持仓均价 (保留3位小数)
 	if pos.VolumeLong > 0 {
-		pos.OpenPriceLong = pos.OpenCostLong / (float64(pos.VolumeLong) * volumeMultiple)
-		pos.PositionPriceLong = pos.PositionCostLong / (float64(pos.VolumeLong) * volumeMultiple)
+		pos.OpenPriceLong = round3(pos.OpenCostLong / (float64(pos.VolumeLong) * volumeMultiple))
+		pos.PositionPriceLong = round3(pos.PositionCostLong / (float64(pos.VolumeLong) * volumeMultiple))
 	}
 	if pos.VolumeShort > 0 {
-		pos.OpenPriceShort = pos.OpenCostShort / (float64(pos.VolumeShort) * volumeMultiple)
-		pos.PositionPriceShort = pos.PositionCostShort / (float64(pos.VolumeShort) * volumeMultiple)
+		pos.OpenPriceShort = round3(pos.OpenCostShort / (float64(pos.VolumeShort) * volumeMultiple))
+		pos.PositionPriceShort = round3(pos.PositionCostShort / (float64(pos.VolumeShort) * volumeMultiple))
 	}
 
 	pos.Changed = true
-	logger.Debug("position profit updated", zap.String("instrument_id", pos.InstrumentID), zap.Bool("changed", pos.Changed))
 	return true
 }
 
@@ -642,39 +618,60 @@ const (
 	algorithmTypeNone     = '4' // THOST_FTDC_AG_None: 盈亏不计入可用
 )
 
-// recalculateAccountProfit 重新计算账户盈亏
-// 对应 C++ SendUserData 中账户盈亏汇总逻辑 (tradectp.cpp:4310-4377)
-func (t *TraderCTP) recalculateAccountProfit() {
-	if t.user == nil {
+// recalculatePositionAndAccountProfit 统一重算持仓盈亏和账户盈亏
+// 对应 C++ SendUserData 中的盈亏计算逻辑 (tradectp.cpp:4048-4377)
+// 类似 tradersim 的 recalculatePositionAndFloatProfit，在一次调用中完成所有计算
+// 此函数应在 sendAllUserData() 中调用，而不是在行情回调中
+// 注意：调用者需持有 userMu 锁
+func (t *TraderCTP) recalculatePositionAndAccountProfit() {
+	if t.user == nil || t.marketClient == nil {
 		return
 	}
-	var somethingChanged bool
-	var totalPositionProfit, totalFloatProfit, totalOptionValue float64
 
+	var totalPositionProfit, totalFloatProfit, totalOptionValue float64
+	var somethingChanged bool
+
+	// 遍历所有持仓，获取最新行情并计算盈亏
 	for _, pos := range t.user.Positions {
-		if pos.Changed {
-			isOption := pos.Ins != nil && pos.Ins.ProductClass == protocol.ProductClassOptions
-			if isOption {
-				// 期权价值单独计算，盈亏不计入账户汇总
-				// 对应 C++ total_option_value 计算
-				multiple := float64(1)
-				if pos.Ins != nil && pos.Ins.VolumeMultiple > 0 {
-					multiple = float64(pos.Ins.VolumeMultiple)
-				}
-				if !math.IsNaN(pos.LastPrice) && pos.LastPrice > 0 {
-					totalOptionValue += float64(pos.VolumeLong) * multiple * pos.LastPrice
-					totalOptionValue -= float64(pos.VolumeShort) * multiple * pos.LastPrice
-				}
-			} else {
-				// 期货盈亏计入汇总
-				if !math.IsNaN(pos.PositionProfit) {
-					totalPositionProfit += pos.PositionProfit
-				}
-				if !math.IsNaN(pos.FloatProfit) {
-					totalFloatProfit += pos.FloatProfit
-				}
+		// 获取最新行情
+		quote := t.marketClient.GetQuote(pos.InstrumentID)
+		if quote == nil {
+			// 没有行情数据，使用已有的盈亏值
+			if !math.IsNaN(pos.PositionProfit) {
+				totalPositionProfit += pos.PositionProfit
 			}
+			if !math.IsNaN(pos.FloatProfit) {
+				totalFloatProfit += pos.FloatProfit
+			}
+			continue
+		}
+
+		// 更新持仓盈亏
+		if t.updatePositionProfitWithQuote(pos, quote) {
 			somethingChanged = true
+		}
+
+		// 累计盈亏
+		isOption := pos.Ins != nil && pos.Ins.ProductClass == protocol.ProductClassOptions
+		if isOption {
+			// 期权价值单独计算，盈亏不计入账户汇总
+			// 对应 C++ total_option_value 计算
+			multiple := float64(1)
+			if pos.Ins != nil && pos.Ins.VolumeMultiple > 0 {
+				multiple = float64(pos.Ins.VolumeMultiple)
+			}
+			if !math.IsNaN(pos.LastPrice) && pos.LastPrice > 0 {
+				totalOptionValue += float64(pos.VolumeLong) * multiple * pos.LastPrice
+				totalOptionValue -= float64(pos.VolumeShort) * multiple * pos.LastPrice
+			}
+		} else {
+			// 期货盈亏计入汇总
+			if !math.IsNaN(pos.PositionProfit) {
+				totalPositionProfit += pos.PositionProfit
+			}
+			if !math.IsNaN(pos.FloatProfit) {
+				totalFloatProfit += pos.FloatProfit
+			}
 		}
 	}
 
@@ -682,6 +679,7 @@ func (t *TraderCTP) recalculateAccountProfit() {
 	if !somethingChanged {
 		return
 	}
+
 	for _, acc := range t.user.Accounts {
 		// 计算 Algorithm_Type 对可用资金的影响
 		// 对应 C++ switch (m_Algorithm_Type) { ... }
@@ -764,25 +762,6 @@ func (t *TraderCTP) startPositionUpdateLoop() {
 func (t *TraderCTP) sendUserDataIfChanged() {
 	// 直接发送变化的数据 (diff 模式会检查 changed 标志)
 	t.sendAllUserData()
-}
-
-// updateAllPositionProfitsNoLock 更新所有持仓的盈亏 (不加锁，调用者需持有锁)
-// 对应 C++ SendUserDataImd 中遍历持仓重算盈亏的逻辑
-func (t *TraderCTP) updateAllPositionProfitsNoLock() bool {
-	if t.marketClient == nil || t.user == nil {
-		return false
-	}
-
-	changed := false
-	for symbol, pos := range t.user.Positions {
-		quote := t.marketClient.GetQuote(symbol)
-		if quote != nil {
-			if t.updatePositionProfit(pos, quote) {
-				changed = true
-			}
-		}
-	}
-	return changed
 }
 
 // escapeJSONString 转义 JSON 字符串
